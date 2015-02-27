@@ -1,14 +1,16 @@
-import pyinotify, re, os, ConfigParser, threading, sys, platform
+import pyinotify, re, os, ConfigParser, threading, argparse, platform, sys
 
 connections = {}
 timeout = 0
+attempts = 3
 
 def ban_ip(ip, service=""):
 	os.system("iptables -A INPUT -p tcp --dport ssh -s %s -j DROP" % ip)
 	if(timeout != 0):
-		unban = Timer(timeout, unban_ip, args=[ip,])
+		unban = threading.Timer(timeout, unban_ip, args=[ip,]).start()
 
 def unban_ip(ip, service=""):
+	print "Unbanning ip %s" % ip
 	os.system("iptables -D INPUT -p tcp --dport ssh -s %s -j DROP" % ip)
 
 def reset_iptables():
@@ -30,6 +32,7 @@ def get_last_lines(file):
 			break
 
 class EventHandler(pyinotify.ProcessEvent):
+
 	def process_IN_MODIFY(self, event):
 		line = get_last_lines(event.pathname)
 		if(line is not None):
@@ -40,7 +43,7 @@ class EventHandler(pyinotify.ProcessEvent):
 					pass
 				else:
 					connections[ip] += 1
-					if(connections[ip] == 2):
+					if(connections[ip] == attempts):
 						ban_ip(ip)
 			except KeyError:
 				connections[ip] = 1
@@ -50,10 +53,11 @@ def main():
 		watch_file = "/var/log/auth.log"
 	else:
 		watch_file = "/var/log/secure"
-	wm = pyinotify.WatchManager()
-	file_events = pyinotify.IN_MODIFY
 
+	wm = pyinotify.WatchManager()
 	handler = EventHandler()
+
+	file_events = pyinotify.IN_MODIFY
 	notifier = pyinotify.Notifier(wm, handler)
 	wdd = wm.add_watch(watch_file, file_events, rec=True)
 
@@ -62,11 +66,13 @@ def main():
 
 if __name__ == '__main__':
 
-	if(len(sys.argv) == 3):
-		timeout = int(sys.argv[2])
-		main()
-	elif(len(sys.argv) == 1):
-		main()
-	else:
-		print "Format: python pyIDS.py [-t timeout]"
-		print "-t : Time till IPs get unbanned in seconds, default value of 0 never unbans"
+	parser = argparse.ArgumentParser(description="Python IDS")
+	parser.add_argument("-t", "--timeout", type=int, help="Time till IPs get unbanned in seconds")
+	parser.add_argument("-a", "--attempt", type=int, help="Attempts until IPS bans IP")
+	args = parser.parse_args()
+	if(args.timeout is not None):
+		timeout = args.timeout
+	if(args.attempt is not None):
+		attempts = args.attempt
+
+	main()
