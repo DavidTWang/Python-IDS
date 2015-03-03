@@ -1,7 +1,8 @@
 #-----------------------------------------------------------------------------
 #--	SOURCE FILE:	asn3.py -   A simple IDPS
 #--
-#--	FUNCTIONS:		ban_ip(ip, service)
+#--	FUNCTIONS:		def increment_attempt(self, service)
+#-- 				ban_ip(ip, service)
 #--					unban_ip(ip, service)
 #--					reset_iptables()
 #--					load_cfg()
@@ -19,8 +20,15 @@
 #--					Brij Shah
 #--
 #--	NOTES:
-#--	
-#--	
+#--	This script runs as an intrusion detection/prevention system that carries
+#--	out the following tasks:
+#-- 1) monitors the log file of user's choice through the config file
+#-- 2) detects the number of attempts by a particular IP that has gone over
+#--	   a user-specified limit and implements an iptables rule to ban it a 
+#--	   user specified time limit
+#--	3) Unbans user from iptables upon expiration of user-specified time limit 
+#--
+#-- The script should also be activated via crontab to run at system boot.
 #-----------------------------------------------------------------------------
 
 import pyinotify, re, os, threading, argparse
@@ -42,6 +50,24 @@ class Connections:
 		for service in SERVICES:
 			self.tries[service] = 0
 
+#-----------------------------------------------------------------------------
+#-- FUNCTION:       def increment_attempt(self, service)    
+#--
+#-- DATE:           February 2, 2015
+#--
+#-- VARIABLES(S):   self - all the variables inside the class
+#--					service - type of service the ip is banned from
+#--
+#-- DESIGNERS:      David Wang
+#--					Brij Shah
+#--
+#-- PROGRAMMERS:    David Wang
+#--					Brij Shah
+#--
+#-- NOTES:
+#-- This function increments the amount of attempts made on a particular
+#-- service.
+#-----------------------------------------------------------------------------
 	def increment_attempt(self, service):
 		self.tries[service] += 1
 		return self.tries[service]
@@ -245,7 +271,7 @@ def main():
 if __name__ == '__main__':
 
 	parser = argparse.ArgumentParser(description="Python IDS")
-	parser.add_argument("-t", "--TIMEOUT", type=int, help="Time till IPs get unbanned in seconds")
+	parser.add_argument("-t", "--TIMEOUT", type=int, help="Time till IP's get unbanned in seconds")
 	parser.add_argument("-a", "--attempt", type=int, help="MAX_ATTEMPTS until IPS bans IP")
 	args = parser.parse_args()
 	if args.TIMEOUT is not None:
