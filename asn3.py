@@ -2,11 +2,24 @@ import pyinotify, re, os, threading, argparse
 from ConfigParser import SafeConfigParser
 from collections import defaultdict
 
-CONNECTIONS = {}
+CONNLIST = []
 SERVICES = defaultdict()
 TIMEOUT = 0
-ATTEMPTS = 3
+MAX_ATTEMPTS = 3
 CFG_NAME = "idsconf"
+
+class Connections:
+	ip = ""
+	tries = {}
+
+	def __init__(self, ip):
+		self.ip = ip
+		for service in SERVICES:
+			self.tries[service] = 0
+
+	def increment_attempt(self, service):
+		self.tries[service] += 1
+		return self.tries[service]
 
 def ban_ip(ip, service):
 	os.system("iptables -A INPUT -p tcp --dport %s -s %s -j DROP" % (service, ip))
@@ -14,7 +27,7 @@ def ban_ip(ip, service):
 		threading.Timer(TIMEOUT, unban_ip, args=[ip,service,]).start()
 
 def unban_ip(ip, service):
-	print "Unbanning ip %s" % ip
+	print "Unbanning ip %s from %s" % (ip, service)
 	os.system("iptables -D INPUT -p tcp --dport %s -s %s -j DROP" % (service, ip))
 
 def reset_iptables():
@@ -54,19 +67,19 @@ class EventHandler(pyinotify.ProcessEvent):
 		if line is not None:
 			ip = re.findall(r'[0-9]+(?:\.[0-9]+){3}', line)[0]
 			if ip is not None:
+				if(len(CONNLIST) == 0):
+					conn = Connections(ip)
+					conn.increment_attempt(service)
+					CONNLIST.append(conn)
+				else:
+					for conn in CONNLIST:
+						if conn.ip == ip:
+							if conn.increment_attempt(service) == MAX_ATTEMPTS:
+								ban_ip(ip, service)
+								print("Banning %s from %s" % (ip, service))
+						else:
+							CONNLIST.append(Connections(ip))
 				print "Bad login from %s on %s" % (ip, service)
-				try:
-					if CONNECTIONS[ip] is None:
-						pass
-					else:
-						CONNECTIONS[ip] += 1
-						if(CONNECTIONS[ip] >= ATTEMPTS):
-							ban_ip(ip, service)
-				except KeyError:
-					CONNECTIONS[ip] = 1
-
-	def process_default(self, event):
-		print event
 
 def main():
 	load_cfg()
@@ -87,10 +100,11 @@ if __name__ == '__main__':
 
 	parser = argparse.ArgumentParser(description="Python IDS")
 	parser.add_argument("-t", "--TIMEOUT", type=int, help="Time till IPs get unbanned in seconds")
-	parser.add_argument("-a", "--attempt", type=int, help="ATTEMPTS until IPS bans IP")
+	parser.add_argument("-a", "--attempt", type=int, help="MAX_ATTEMPTS until IPS bans IP")
 	args = parser.parse_args()
 	if args.TIMEOUT is not None:
 		TIMEOUT = args.TIMEOUT
 	if args.attempt is not None:
-		ATTEMPTS = args.attempt
+		MAX_ATTEMPTS = args.attempt
+
 	main()
