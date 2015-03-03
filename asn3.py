@@ -1,3 +1,28 @@
+#-----------------------------------------------------------------------------
+#--	SOURCE FILE:	asn3.py -   A simple IDPS
+#--
+#--	FUNCTIONS:		ban_ip(ip, service)
+#--					unban_ip(ip, service)
+#--					reset_iptables()
+#--					load_cfg()
+#--					get_last_lines(file, keyword)
+#--					def process_IN_MODIFY(self, event)
+#--					def process_default(self, event)
+#--					def main()
+#--
+#--	DATE:			February 2, 2015
+#--
+#--	DESIGNERS:		David Wang
+#--					Brij Shah
+#--
+#--	PROGRAMMERS:	David Wang
+#--					Brij Shah
+#--
+#--	NOTES:
+#--	
+#--	
+#-----------------------------------------------------------------------------
+
 import pyinotify, re, os, threading, argparse
 from ConfigParser import SafeConfigParser
 from collections import defaultdict
@@ -8,18 +33,89 @@ TIMEOUT = 0
 ATTEMPTS = 3
 CFG_NAME = "idsconf"
 
+#-----------------------------------------------------------------------------
+#-- FUNCTION:       def ban_ip(ip, service)    
+#--
+#-- DATE:           February 2, 2015
+#--
+#-- VARIABLES(S):   ip - external client ip address to be banned
+#--					service - type of service the ip is banned from
+#--
+#-- DESIGNERS:      David Wang
+#--					Brij Shah
+#--
+#-- PROGRAMMERS:    David Wang
+#--					Brij Shah
+#--
+#-- NOTES:
+#-- This function takes in an ip and a type of service the ip is being banned
+#-- from and invokes an iptable using netfilter to block the specified ip. It
+#-- creates a thread that runs the fuction in a given time(in seconds). If 
+#-- TIMEOUT is set (to not 0) it unbans the ip in TIMEOUT(seconds).
+#-----------------------------------------------------------------------------
 def ban_ip(ip, service):
 	os.system("iptables -A INPUT -p tcp --dport %s -s %s -j DROP" % (service, ip))
 	if(TIMEOUT != 0):
 		threading.Timer(TIMEOUT, unban_ip, args=[ip,service,]).start()
 
+#-----------------------------------------------------------------------------
+#-- FUNCTION:       def unban_ip(ip, service)    
+#--
+#-- DATE:           February 2, 2015
+#--
+#-- VARIABLES(S):   ip - external client ip address to be banned
+#--					service - type of service the ip is banned from
+#--
+#-- DESIGNERS:      David Wang
+#--					Brij Shah
+#--
+#-- PROGRAMMERS:    David Wang
+#--					Brij Shah
+#--
+#-- NOTES:
+#-- This function takes in an ip and a type of service the ip is being unbanned
+#-- from and invokes an iptable using netfilter to unblock the specified ip.
+#-----------------------------------------------------------------------------
 def unban_ip(ip, service):
 	print "Unbanning ip %s" % ip
 	os.system("iptables -D INPUT -p tcp --dport %s -s %s -j DROP" % (service, ip))
 
+#-----------------------------------------------------------------------------
+#-- FUNCTION:       def reset_iptables()   
+#--
+#-- DATE:           February 2, 2015
+#--
+#-- DESIGNERS:      David Wang
+#--					Brij Shah
+#--
+#-- PROGRAMMERS:    David Wang
+#--					Brij Shah
+#--
+#-- NOTES:
+#-- This function invokes iptables using netfilter to reset all IPTABLES to
+#-- default.
+#-----------------------------------------------------------------------------
 def reset_iptables():
 	os.system("iptables -F")
 
+#-----------------------------------------------------------------------------
+#-- FUNCTION:       def load_cfg()   
+#--
+#-- DATE:           February 2, 2015
+#--
+#-- DESIGNERS:      David Wang
+#--					Brij Shah
+#--
+#-- PROGRAMMERS:    David Wang
+#--					Brij Shah
+#--
+#-- NOTES:
+#-- This function creates a configParser object and parses the config file to 
+#-- obtain service(s) as well as keywords and log location associated with the 
+#-- service. It proceeds to store the information in a list of services to 
+#-- monitor. 
+#-- keyword example: "FAIL LOGIN"
+#-----------------------------------------------------------------------------
 def load_cfg():
 	parser = SafeConfigParser()
 	parser.read(CFG_NAME)
@@ -32,6 +128,24 @@ def load_cfg():
 				filepath = value
 		SERVICES[sections] = [keyword, filepath]
 
+#-----------------------------------------------------------------------------
+#-- FUNCTION:       def get_last_lines(file, keyword)   
+#--
+#-- DATE:           February 2, 2015
+#--
+#-- VARIABLES(S):   file - the file to read
+#--					keyword - specific words to inspect for
+#--
+#-- DESIGNERS:      David Wang
+#--					Brij Shah
+#--
+#-- PROGRAMMERS:    David Wang
+#--					Brij Shah
+#--
+#-- NOTES:
+#-- This function seeks to the end of the file and returns the line that obtains 
+#-- the keyword.
+#-----------------------------------------------------------------------------
 def get_last_lines(file, keyword):
 	with open(file, "r") as f:
 		f.seek(0, 2)
@@ -45,6 +159,23 @@ def get_last_lines(file, keyword):
 
 class EventHandler(pyinotify.ProcessEvent):
 
+#-----------------------------------------------------------------------------
+#-- FUNCTION:       def process_IN_MODIFY(self, event)    
+#--
+#-- DATE:           February 2, 2015
+#--
+#-- VARIABLES(S):   self - 
+#--					event - 
+#--
+#-- DESIGNERS:      David Wang
+#--					Brij Shah
+#--
+#-- PROGRAMMERS:    David Wang
+#--					Brij Shah
+#--
+#-- NOTES:
+#-- This function 
+#-----------------------------------------------------------------------------
 	def process_IN_MODIFY(self, event):
 		for service, attr in SERVICES.iteritems():
 			if event.pathname == attr[1]:
@@ -65,9 +196,40 @@ class EventHandler(pyinotify.ProcessEvent):
 				except KeyError:
 					CONNECTIONS[ip] = 1
 
+#-----------------------------------------------------------------------------
+#-- FUNCTION:       def process_default(self, event)    
+#--
+#-- DATE:           February 2, 2015
+#--
+#-- VARIABLES(S):   self - 
+#--					event - 
+#--
+#-- DESIGNERS:      David Wang
+#--					Brij Shah
+#--
+#-- PROGRAMMERS:    David Wang
+#--					Brij Shah
+#--
+#-- NOTES:
+#-- This function 
+#-----------------------------------------------------------------------------
 	def process_default(self, event):
 		print event
 
+#-----------------------------------------------------------------------------
+#-- FUNCTION:       def main()   
+#--
+#-- DATE:           February 2, 2015
+#--
+#-- DESIGNERS:      David Wang
+#--					Brij Shah
+#--
+#-- PROGRAMMERS:    David Wang
+#--					Brij Shah
+#--
+#-- NOTES:
+#-- This function 
+#-----------------------------------------------------------------------------
 def main():
 	load_cfg()
 
