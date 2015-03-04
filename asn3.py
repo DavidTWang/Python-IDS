@@ -1,6 +1,11 @@
 #-----------------------------------------------------------------------------
 #--	SOURCE FILE:	asn3.py -   A simple IDPS
 #--
+#--	CLASSES:		EventHandler
+#--						process_IN_MODIFY()
+#--					Connections
+#--						increment_attempt()
+#--
 #--	FUNCTIONS:		def increment_attempt(self, service)
 #-- 				ban_ip(ip, service)
 #--					unban_ip(ip, service)
@@ -39,52 +44,76 @@ CONNLIST = []
 SERVICES = defaultdict()
 TIMEOUT = 0
 MAX_ATTEMPTS = 3
-CFG_NAME = "idsconf"
+CFG_NAME = "/root/Temp/c8006-idps/idsconf"
+
+#-----------------------------------------------------------------------------
+#-- CLASS:       	EventHandler
+#--
+#-- FUNCTIONS:		process_IN_MODIFY(self, event)
+#--
+#-- NOTES: 
+#-- 
+#-----------------------------------------------------------------------------
+class EventHandler(pyinotify.ProcessEvent):
+
+	#-----------------------------------------------------------------------------
+	#-- FUNCTION:       def process_IN_MODIFY(self, event)    
+	#--
+	#-- VARIABLES(S):   self - 
+	#--					event - 
+	#--
+	#-- NOTES:
+	#-- 
+	#-----------------------------------------------------------------------------
+	def process_IN_MODIFY(self, event):
+		line = None
+		for service, attr in SERVICES.iteritems():
+			if event.pathname == attr[1]:
+				line = get_last_lines(attr[1], attr[0])
+				break
+
+		if line is not None:
+			ip = re.findall(r'[0-9]+(?:\.[0-9]+){3}', line)[0]
+			if ip is not None:
+				print "Bad login from %s on %s" % (ip, service)
+				if len(CONNLIST) == 0:
+					conn = Connections(ip)
+					conn.attempts[service] += 1
+					CONNLIST.append(conn)
+				else:
+					append = 0
+					for conn in CONNLIST:
+						if conn.ip == ip:
+							append = 1
+							conn.attempts[service] += 1
+							if conn.attempts[service] >= MAX_ATTEMPTS:
+								ban_ip(ip, service)
+								print("Banning %s from %s" % (ip, service))
+							break
+					if append == 0:
+						print "Appending..."
+						conn = Connections(ip)
+						conn.attempts[service] += 1
+						CONNLIST.append(conn)
 
 class Connections:
-	ip = ""
-	tries = {}
 
-	def __init__(self, ip):
+	def __init__(self, ip, attempts=None):
 		self.ip = ip
-		for service in SERVICES:
-			self.tries[service] = 0
+		if attempts is None:
+			self.attempts = {}
+		else:
+			self.attempts = attempts
 
-#-----------------------------------------------------------------------------
-#-- FUNCTION:       def increment_attempt(self, service)    
-#--
-#-- DATE:           February 2, 2015
-#--
-#-- VARIABLES(S):   self - all the variables inside the class
-#--					service - type of service the ip is banned from
-#--
-#-- DESIGNERS:      David Wang
-#--					Brij Shah
-#--
-#-- PROGRAMMERS:    David Wang
-#--					Brij Shah
-#--
-#-- NOTES:
-#-- This function increments the amount of attempts made on a particular
-#-- service.
-#-----------------------------------------------------------------------------
-	def increment_attempt(self, service):
-		self.tries[service] += 1
-		return self.tries[service]
+		for service in SERVICES:
+			self.attempts[service] = 0
 
 #-----------------------------------------------------------------------------
 #-- FUNCTION:       def ban_ip(ip, service)    
 #--
-#-- DATE:           February 2, 2015
 #--
 #-- VARIABLES(S):   ip - external client ip address to be banned
 #--					service - type of service the ip is banned from
-#--
-#-- DESIGNERS:      David Wang
-#--					Brij Shah
-#--
-#-- PROGRAMMERS:    David Wang
-#--					Brij Shah
 #--
 #-- NOTES:
 #-- This function takes in an ip and a type of service the ip is being banned
@@ -93,23 +122,15 @@ class Connections:
 #-- TIMEOUT is set (to not 0) it unbans the ip in TIMEOUT(seconds).
 #-----------------------------------------------------------------------------
 def ban_ip(ip, service):
-	os.system("iptables -A INPUT -p tcp --dport %s -s %s -j DROP" % (service, ip))
+	os.system("/usr/sbin/iptables -A INPUT -p tcp --dport %s -s %s -j DROP" % (service, ip))
 	if(TIMEOUT != 0):
 		threading.Timer(TIMEOUT, unban_ip, args=[ip,service,]).start()
 
 #-----------------------------------------------------------------------------
 #-- FUNCTION:       def unban_ip(ip, service)    
 #--
-#-- DATE:           February 2, 2015
-#--
 #-- VARIABLES(S):   ip - external client ip address to be banned
 #--					service - type of service the ip is banned from
-#--
-#-- DESIGNERS:      David Wang
-#--					Brij Shah
-#--
-#-- PROGRAMMERS:    David Wang
-#--					Brij Shah
 #--
 #-- NOTES:
 #-- This function takes in an ip and a type of service the ip is being unbanned
@@ -117,36 +138,20 @@ def ban_ip(ip, service):
 #-----------------------------------------------------------------------------
 def unban_ip(ip, service):
 	print "Unbanning ip %s from %s" % (ip, service)
-	os.system("iptables -D INPUT -p tcp --dport %s -s %s -j DROP" % (service, ip))
+	os.system("/usr/sbin/iptables -D INPUT -p tcp --dport %s -s %s -j DROP" % (service, ip))
 
 #-----------------------------------------------------------------------------
 #-- FUNCTION:       def reset_iptables()   
-#--
-#-- DATE:           February 2, 2015
-#--
-#-- DESIGNERS:      David Wang
-#--					Brij Shah
-#--
-#-- PROGRAMMERS:    David Wang
-#--					Brij Shah
 #--
 #-- NOTES:
 #-- This function invokes iptables using netfilter to reset all IPTABLES to
 #-- default.
 #-----------------------------------------------------------------------------
 def reset_iptables():
-	os.system("iptables -F")
+	os.system("/usr/sbin/iptables -F")
 
 #-----------------------------------------------------------------------------
 #-- FUNCTION:       def load_cfg()   
-#--
-#-- DATE:           February 2, 2015
-#--
-#-- DESIGNERS:      David Wang
-#--					Brij Shah
-#--
-#-- PROGRAMMERS:    David Wang
-#--					Brij Shah
 #--
 #-- NOTES:
 #-- This function creates a configParser object and parses the config file to 
@@ -170,16 +175,8 @@ def load_cfg():
 #-----------------------------------------------------------------------------
 #-- FUNCTION:       def get_last_lines(file, keyword)   
 #--
-#-- DATE:           February 2, 2015
-#--
 #-- VARIABLES(S):   file - the file to read
 #--					keyword - specific words to inspect for
-#--
-#-- DESIGNERS:      David Wang
-#--					Brij Shah
-#--
-#-- PROGRAMMERS:    David Wang
-#--					Brij Shah
 #--
 #-- NOTES:
 #-- This function seeks to the end of the file and returns the line that obtains 
@@ -196,62 +193,11 @@ def get_last_lines(file, keyword):
 		if keyword in line:
 			return line
 
-class EventHandler(pyinotify.ProcessEvent):
-
-#-----------------------------------------------------------------------------
-#-- FUNCTION:       def process_IN_MODIFY(self, event)    
-#--
-#-- DATE:           February 2, 2015
-#--
-#-- VARIABLES(S):   self - 
-#--					event - 
-#--
-#-- DESIGNERS:      David Wang
-#--					Brij Shah
-#--
-#-- PROGRAMMERS:    David Wang
-#--					Brij Shah
-#--
-#-- NOTES:
-#-- This function 
-#-----------------------------------------------------------------------------
-	def process_IN_MODIFY(self, event):
-		for service, attr in SERVICES.iteritems():
-			if event.pathname == attr[1]:
-				line = get_last_lines(attr[1], attr[0])
-				break
-
-		if line is not None:
-			ip = re.findall(r'[0-9]+(?:\.[0-9]+){3}', line)[0]
-			if ip is not None:
-				if(len(CONNLIST) == 0):
-					conn = Connections(ip)
-					conn.increment_attempt(service)
-					CONNLIST.append(conn)
-				else:
-					for conn in CONNLIST:
-						if conn.ip == ip:
-							if conn.increment_attempt(service) == MAX_ATTEMPTS:
-								ban_ip(ip, service)
-								print("Banning %s from %s" % (ip, service))
-						else:
-							CONNLIST.append(Connections(ip))
-				print "Bad login from %s on %s" % (ip, service)
-
-
 #-----------------------------------------------------------------------------
 #-- FUNCTION:       def main()   
 #--
-#-- DATE:           February 2, 2015
-#--
-#-- DESIGNERS:      David Wang
-#--					Brij Shah
-#--
-#-- PROGRAMMERS:    David Wang
-#--					Brij Shah
-#--
 #-- NOTES:
-#-- This function 
+#-- Main function of the program.
 #-----------------------------------------------------------------------------
 def main():
 	load_cfg()
@@ -264,10 +210,16 @@ def main():
 	for service, attr in SERVICES.iteritems():
 		print "Monitoring %s..." % attr[1]
 		wm.add_watch(attr[1], file_events)
-
+	print "Each IP will have %s attempts to access each service" % MAX_ATTEMPTS
+	if TIMEOUT != 0:
+		print "IPs will be unbanned after %s seconds" % TIMEOUT
+	else:
+		print "Banned IPs will not be automatically unbanned"
 	print "running..."
 	notifier.loop()
 
+# Checks if it's the main file at compile time
+# Only run main() if it is
 if __name__ == '__main__':
 
 	parser = argparse.ArgumentParser(description="Python IDS")
