@@ -4,7 +4,7 @@
 #--	CLASSES:		EventHandler
 #--						process_IN_MODIFY()
 #--					Connections
-#--						increment_attempt()
+#--						failed_attempt()
 #--
 #--	FUNCTIONS:		def increment_attempt(self, service)
 #-- 				ban_ip(ip, service)
@@ -36,14 +36,20 @@
 #-- The script should also be activated via crontab to run at system boot.
 #-----------------------------------------------------------------------------
 
-import pyinotify, re, os, threading, argparse
+import pyinotify, re, os, threading, argparse, time
 from ConfigParser import SafeConfigParser
 from collections import defaultdict
 
-CONNLIST = []
-SERVICES = defaultdict()
-TIMEOUT = 0
-MAX_ATTEMPTS = 3
+# Global variables
+CONNLIST = []				# List of connections
+THREADS = []				# List of active threads
+SERVICES = defaultdict()	# Map of services (with log and keyword to monitor)
+UNBAN_TIME = 0				# Time until an IP is banned
+MAX_ATTEMPTS = 3			# Failed attempts before banning
+ATTEMPT_RESET_TIME = 60 	# Time till we flush connection attempts
+SLOW_SCAN_TIME = 30			# Time to wait for re-input before we think it's slow scanning
+
+# File location of configuration file
 CFG_NAME = "/root/Temp/c8006-idps/idsconf"
 
 #-----------------------------------------------------------------------------
@@ -78,28 +84,27 @@ class EventHandler(pyinotify.ProcessEvent):
 				print "Bad login from %s on %s" % (ip, service)
 				if len(CONNLIST) == 0:
 					conn = Connections(ip)
-					conn.attempts[service] += 1
+					failed_attempt(conn, service)
 					CONNLIST.append(conn)
 				else:
 					append = 0
 					for conn in CONNLIST:
 						if conn.ip == ip:
 							append = 1
-							conn.attempts[service] += 1
-							if conn.attempts[service] >= MAX_ATTEMPTS:
-								ban_ip(ip, service)
-								print("Banning %s from %s" % (ip, service))
+							failed_attempt(conn, service)
 							break
 					if append == 0:
-						print "Appending..."
 						conn = Connections(ip)
-						conn.attempts[service] += 1
+						failed_attempt(conn, service)
 						CONNLIST.append(conn)
 
 class Connections:
-
 	def __init__(self, ip, attempts=None):
 		self.ip = ip
+		self.reset_timer = 0
+		self.odd_attempts = 0
+		self.previous_attempt = time.time()
+
 		if attempts is None:
 			self.attempts = {}
 		else:
@@ -107,6 +112,34 @@ class Connections:
 
 		for service in SERVICES:
 			self.attempts[service] = 0
+
+def failed_attempt(conn, service):
+
+	conn.attempts[service] += 1
+	previous_attempt_elapse = time.time() - conn.previous_attempt
+	if previous_attempt_elapse >= SLOW_SCAN_TIME and previous_attempt_elapse < 43200
+		conn.odd_attempts += 1
+		if(conn.odd_attempts >= 3):
+			ban_ip(conn.ip, service, 1) # Ban forever
+			print "Banning %s on %s due to slow scanning suspicions" % (conn.ip, service)
+			return
+	else:
+		conn.previous_attempt = time.time()
+
+	if conn.attempts[service] == MAX_ATTEMPTS:
+		ban_ip(conn.ip, service)
+		print("Banning %s from %s" % (conn.ip, service))
+		conn.attempts[service] = 0
+	elif conn.reset_timer == 0:
+		reset_thread = threading.Timer(ATTEMPT_RESET_TIME, reset_attempts, args=[conn,service,]).start()
+		THREADS.append(reset_thread)
+		conn.reset_timer = 1
+
+
+def reset_attempts(conn, service):
+	print "Resetting ban timer for %s on %s" % (conn.ip, service)
+	conn.attempts[service] = 0
+	conn.reset_timer = 0
 
 #-----------------------------------------------------------------------------
 #-- FUNCTION:       def ban_ip(ip, service)    
@@ -119,15 +152,16 @@ class Connections:
 #-- This function takes in an ip and a type of service the ip is being banned
 #-- from and invokes an iptable using netfilter to block the specified ip. It
 #-- creates a thread that runs the fuction in a given time(in seconds). If 
-#-- TIMEOUT is set (to not 0) it unbans the ip in TIMEOUT(seconds).
+#-- UNBAN_TIME is set (to not 0) it unbans the ip in UNBAN_TIME(seconds).
 #-----------------------------------------------------------------------------
-def ban_ip(ip, service):
+def ban_ip(ip, service, forever=0):
 	os.system("/usr/sbin/iptables -A INPUT -p tcp --dport %s -s %s -j DROP" % (service, ip))
-	if(TIMEOUT != 0):
-		threading.Timer(TIMEOUT, unban_ip, args=[ip,service,]).start()
+	if(UNBAN_TIME != 0 and forever == 0):
+		unban_timer = threading.Timer(UNBAN_TIME, unban_ip, args=[ip,service,]).start()
+		THREADS.append(unban_timer)
 
 #-----------------------------------------------------------------------------
-#-- FUNCTION:       def unban_ip(ip, service)    
+#-- FUNCTION:       def unban_ip(ip, service)
 #--
 #-- VARIABLES(S):   ip - external client ip address to be banned
 #--					service - type of service the ip is banned from
@@ -210,25 +244,38 @@ def main():
 	for service, attr in SERVICES.iteritems():
 		print "Monitoring %s..." % attr[1]
 		wm.add_watch(attr[1], file_events)
-	print "Each IP will have %s attempts to access each service" % MAX_ATTEMPTS
-	if TIMEOUT != 0:
-		print "IPs will be unbanned after %s seconds" % TIMEOUT
+	print "-- Each IP will have %s attempts to access each service" % MAX_ATTEMPTS
+	print "-- Attempts are reset every %s seconds" % ATTEMPT_RESET_TIME
+	print "-- Slow scan timer set to %s seconds" % SLOW_SCAN_TIME
+	if UNBAN_TIME != 0:
+		print "-- IPs will be unbanned after %s seconds" % UNBAN_TIME
 	else:
-		print "Banned IPs will not be automatically unbanned"
+		print "-- Banned IPs will not be automatically unbanned"
 	print "running..."
 	notifier.loop()
 
-# Checks if it's the main file at compile time
+# Checks if it's the main file at runtime
 # Only run main() if it is
+# Ensures that main() does not get run if file is merely imported
 if __name__ == '__main__':
 
 	parser = argparse.ArgumentParser(description="Python IDS")
-	parser.add_argument("-t", "--TIMEOUT", type=int, help="Time till IP's get unbanned in seconds")
-	parser.add_argument("-a", "--attempt", type=int, help="MAX_ATTEMPTS until IPS bans IP")
+	parser.add_argument("-t", "--UNBAN_TIME", type=int, help="Time till IP's get unbanned in seconds")
+	parser.add_argument("-a", "--attempt", type=int, help="Max attempts until program bans IP")
+	parser.add_argument("-r", "--reset", type=int, help="Time before attempts are reset")
+	parser.add_argument("-s", "--slowscan", type=int, help="Time to wait for re-input before we think it's slow scanning")
 	args = parser.parse_args()
-	if args.TIMEOUT is not None:
-		TIMEOUT = args.TIMEOUT
+	if args.UNBAN_TIME is not None:
+		UNBAN_TIME = args.UNBAN_TIME
 	if args.attempt is not None:
 		MAX_ATTEMPTS = args.attempt
+	if args.reset is not None:
+		ATTEMPT_RESET_TIME = args.reset
+	if args.slowscan is not None:
+		SLOW_SCAN_TIME = args.slowscan
 
-	main()
+	try:
+		main()
+	except KeyboardInterrupt:
+		for thread in THREADS:
+			thread.cancel()
